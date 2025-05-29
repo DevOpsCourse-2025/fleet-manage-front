@@ -1,0 +1,61 @@
+pipeline {  
+    agent any  
+      
+    tools {  
+        nodejs '18'  
+    }  
+      
+    stages {  
+        stage('Checkout') {  
+            steps {  
+                checkout scm  
+            }  
+        }  
+          
+        stage('Install Dependencies') {  
+            steps {  
+                sh 'npm ci'  
+            }  
+        }  
+          
+        stage('Type Check') {  
+            steps {  
+                sh 'npx tsc --noEmit'  
+            }  
+        }  
+          
+        stage('Run Tests') {  
+            steps {  
+                sh 'npm run test:run'  
+            }  
+            post {  
+                always {  
+                    publishTestResults testResultsPattern: 'test-results.xml'  
+                    publishCoverage adapters: [istanbulCoberturaAdapter('coverage/cobertura-coverage.xml')]  
+                }  
+            }  
+        }  
+          
+        stage('Build') {  
+            steps {  
+                sh 'npm run build'  
+            }  
+        }  
+    }  
+      
+    post {  
+        always {  
+            cleanWs()  
+        }  
+        success {  
+            archiveArtifacts artifacts: 'dist/**/*', fingerprint: true  
+        }  
+        failure {  
+            emailext (  
+                subject: "Build Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",  
+                body: "Build failed. Check console output at ${env.BUILD_URL}",  
+                to: "${env.CHANGE_AUTHOR_EMAIL}"  
+            )  
+        }  
+    }  
+}
