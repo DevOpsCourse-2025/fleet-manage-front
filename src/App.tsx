@@ -43,6 +43,7 @@ import { VehiclesEditPage } from "./pages/vehicles.edit";
 import { VehiclesNewPage } from "./pages/vehicles.new";
 
 function App() {
+
   return (
     <BrowserRouter>
       <DevtoolsProvider>

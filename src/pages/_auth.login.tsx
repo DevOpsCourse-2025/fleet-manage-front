@@ -22,7 +22,7 @@ export function Login() {
   async function getInvitationCode(email: string, password: string): Promise<string> {  
     setIsLoadingCode(true);  
     try {  
-      const response = await fetch(`api/admin/get/${email}`, {  
+      const response = await fetch(`${import.meta.env.VITE_API_ORIGIN}/admin/get/${email}`, {  
         method: "POST",  
         headers: {  
           "Content-Type": "application/json",  
@@ -35,6 +35,7 @@ export function Login() {
       }  
       throw new Error("No se pudo obtener el código de invitación");  
     } catch (error) {  
+      console.log(error);
       throw new Error("Error al obtener el código de invitación");  
     } finally {  
       setIsLoadingCode(false);  

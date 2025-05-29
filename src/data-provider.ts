@@ -3,14 +3,14 @@ import { fetchApi } from "./lib/utils";
 
 export const dataProvider = (apiUrl: string): DataProvider => ({
   getList: async ({ resource }) => {
-    const { items: data } = await fetchApi(`api/${resource}`);
+    const { items: data } = await fetchApi(`${import.meta.env.VITE_API_ORIGIN}/${resource}`);
     return {
       data,
       total: data.length,
     };
   },
   getOne: async ({ resource, id }) => {
-    const data = await fetchApi(`api/${resource}/${id}`);
+    const data = await fetchApi(`${import.meta.env.VITE_API_ORIGIN}/${resource}/${id}`);
     return {
       data,
     };
