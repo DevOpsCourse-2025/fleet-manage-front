@@ -1,103 +1,93 @@
 pipeline {  
     agent any  
-      
+  
     environment {  
-        DOCKER_REGISTRY = 'your-registry.com'  
-        IMAGE_NAME = 'fleet-manage-front'  
-        IMAGE_TAG = "${env.BUILD_NUMBER}"  
+        REMOTE_IP = '40.233.6.181'  
+        DOCKER_USER = 'jcq12'  
+        IMAGE_TAG = 'latest'  
+        FRONTEND_PROJECT = 'fleet-manage-front'  
     }  
-      
+  
     stages {  
         stage('Checkout') {  
             steps {  
                 checkout scm  
             }  
         }  
-          
-        stage('Build Docker Image') {  
+  
+        stage('Obtener cambios del frontend') {  
             steps {  
-                script {  
-                    docker.build("${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")  
+                copyArtifacts(  
+                    projectName: 'fleet-manage-front-build',  
+                    filter: 'frontend_changed.txt'  
+                )  
+            }  
+        }  
+  
+        stage('Desplegar frontend') {  
+            when {  
+                expression {  
+                    return fileExists('frontend_changed.txt') && readFile('frontend_changed.txt').trim() == 'true'  
                 }  
             }  
-        }  
-          
-        stage('Push to Registry') {  
             steps {  
-                script {  
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-registry-credentials') {  
-                        docker.image("${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}").push()  
-                        docker.image("${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}").push('latest')  
-                    }  
-                }  
+                bat '''  
+                    @echo off  
+                    echo ===========================  
+                    echo Desplegando %FRONTEND_PROJECT%  
+                    echo Contenedor: fleet-manage-front  
+                    echo Puerto: 3000  
+                    echo ===========================  
+  
+                    ssh -i key.pem opc@%REMOTE_IP% sudo docker pull %DOCKER_USER%/%FRONTEND_PROJECT%:%IMAGE_TAG%  
+  
+                    ssh -i key.pem opc@%REMOTE_IP% sudo docker ps -a -q -f name=^/fleet-manage-front$ > nul && (  
+                        echo Contenedor fleet-manage-front existe. Deteniéndolo y eliminándolo...  
+                        ssh -i key.pem opc@%REMOTE_IP% sudo docker stop fleet-manage-front  
+                        ssh -i key.pem opc@%REMOTE_IP% sudo docker rm fleet-manage-front  
+                    ) || (  
+                        echo Contenedor fleet-manage-front no existe. Continuando...  
+                    )  
+  
+                    ssh -i key.pem opc@%REMOTE_IP% sudo docker run -d --name fleet-manage-front --network ms-network -p 3000:80 %DOCKER_USER%/%FRONTEND_PROJECT%:%IMAGE_TAG%  
+                      
+                    rem Conectar también a red-web si es necesario  
+                    ssh -i key.pem opc@%REMOTE_IP% sudo docker network connect red-web fleet-manage-front  
+                '''  
             }  
         }  
-          
-        stage('Deploy to Staging') {  
-            steps {  
-                sh """  
-                    docker stop fleet-manage-front-staging || true  
-                    docker rm fleet-manage-front-staging || true  
-                    docker run -d --name fleet-manage-front-staging \  
-                        -p 3000:3000 \  
-                        ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}  
-                """  
-            }  
-        }  
-          
+  
         stage('Health Check') {  
             steps {  
                 script {  
-                    timeout(time: 2, unit: 'MINUTES') {  
-                        waitUntil {  
-                            script {  
-                                def response = sh(  
-                                    script: 'curl -s -o /dev/null -w "%{http_code}" http://localhost:3000',  
-                                    returnStdout: true  
-                                ).trim()  
-                                return response == '200'  
-                            }  
-                        }  
+                    sleep(15) // Esperar que el contenedor inicie  
+                      
+                    def response = bat(  
+                        script: "ssh -i key.pem opc@${env.REMOTE_IP} curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000",  
+                        returnStdout: true  
+                    ).trim()  
+                      
+                    if (response != '200') {  
+                        error("Health check failed. HTTP status: ${response}")  
+                    } else {  
+                        echo "Frontend desplegado exitosamente y respondiendo en puerto 3000"  
                     }  
                 }  
             }  
         }  
-          
-        stage('Deploy to Production') {  
-            when {  
-                branch 'main'  
-            }  
-            input {  
-                message "Deploy to production?"  
-                ok "Deploy"  
-            }  
-            steps {  
-                sh """  
-                    docker stop fleet-manage-front-prod || true  
-                    docker rm fleet-manage-front-prod || true  
-                    docker run -d --name fleet-manage-front-prod \  
-                        -p 80:3000 \  
-                        ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}  
-                """  
-            }  
-        }  
     }  
-      
+  
     post {  
         always {  
-            sh 'docker system prune -f'  
+            bat 'if exist frontend_changed.txt del frontend_changed.txt'  
         }  
-        success {  
-            slackSend(  
-                color: 'good',  
-                message: "Deployment successful: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"  
-            )  
-        }  
+  
         failure {  
-            slackSend(  
-                color: 'danger',  
-                message: "Deployment failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"  
-            )  
+            echo 'El deployment del frontend falló. Verifica los logs para más detalles.'  
+        }  
+  
+        success {  
+            echo 'Frontend desplegado exitosamente en el servidor remoto.'  
         }  
     }  
 }

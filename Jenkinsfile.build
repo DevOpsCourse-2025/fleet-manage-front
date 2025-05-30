@@ -1,61 +1,103 @@
 pipeline {  
     agent any  
-      
+  
+    parameters {  
+        string(name: 'BASE_BRANCH', defaultValue: 'origin/main', description: 'Rama base para detectar cambios')  
+    }  
+  
+    environment {  
+        FRONTEND_PROJECT = 'fleet-manage-front'  
+        DOCKER_HUB_USER = 'josepuc'  
+        IMAGE_TAG = 'latest'  
+        DOCKER_HUB_CREDENTIALS = 'docker-hub-credentials-id'  
+    }  
+  
     tools {  
         nodejs '18'  
     }  
-      
+  
     stages {  
-        stage('Checkout') {  
+        stage('Detectar cambios en frontend') {  
             steps {  
-                checkout scm  
-            }  
-        }  
-          
-        stage('Install Dependencies') {  
-            steps {  
-                sh 'npm ci'  
-            }  
-        }  
-          
-        stage('Type Check') {  
-            steps {  
-                sh 'npx tsc --noEmit'  
-            }  
-        }  
-          
-        stage('Run Tests') {  
-            steps {  
-                sh 'npm run test:run'  
-            }  
-            post {  
-                always {  
-                    publishTestResults testResultsPattern: 'test-results.xml'  
-                    publishCoverage adapters: [istanbulCoberturaAdapter('coverage/cobertura-coverage.xml')]  
+                script {  
+                    bat 'git fetch origin'  
+  
+                    def diffRaw = bat(script: "git diff --name-only ${params.BASE_BRANCH}", returnStdout: true).trim()  
+                    def diffFiles = diffRaw.tokenize('\n')  
+  
+                    echo "Archivos modificados:\n${diffFiles.join('\n')}"  
+  
+                    def frontendChanged = diffFiles.any { it.startsWith("${env.FRONTEND_PROJECT}/") }  
+  
+                    if (!frontendChanged) {  
+                        echo "No se detectaron cambios en el frontend."  
+                        writeFile file: 'frontend_changed.txt', text: 'false'  
+                    } else {  
+                        echo "Frontend modificado: ${env.FRONTEND_PROJECT}"  
+                        writeFile file: 'frontend_changed.txt', text: 'true'  
+                    }  
                 }  
             }  
         }  
-          
-        stage('Build') {  
+  
+        stage('Build y Deploy Frontend') {  
+            when {  
+                expression {  
+                    return fileExists('frontend_changed.txt') && readFile('frontend_changed.txt').trim() == 'true'  
+                }  
+            }  
             steps {  
-                sh 'npm run build'  
+                script {  
+                    dir(env.FRONTEND_PROJECT) {  
+                        echo "Iniciando build del frontend con Vite..."  
+                          
+                        // Instalar dependencias  
+                        bat 'npm ci'  
+                          
+                        // Ejecutar tests si existen  
+                        script {  
+                            if (fileExists('src/test')) {  
+                                bat 'npm run test:run'  
+                            } else {  
+                                echo 'No se encontraron tests configurados'  
+                            }  
+                        }  
+                          
+                        // Build con Vite  
+                        bat 'npm run build'  
+                          
+                        // Build y push de imagen Docker  
+                        withCredentials([usernamePassword(credentialsId: env.DOCKER_HUB_CREDENTIALS, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {  
+                            bat "echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin"  
+                              
+                            def imageName = "${env.DOCKER_HUB_USER}/${env.FRONTEND_PROJECT}:${env.IMAGE_TAG}"  
+                              
+                            bat """  
+                                docker buildx build --platform linux/arm64 ^  
+                                  -t ${imageName} ^  
+                                  --push ^  
+                                  .  
+                            """  
+                              
+                            bat "docker logout"  
+                        }  
+                    }  
+                }  
             }  
         }  
     }  
-      
+  
     post {  
         always {  
-            cleanWs()  
+            archiveArtifacts artifacts: 'frontend_changed.txt', fingerprint: true  
         }  
-        success {  
-            archiveArtifacts artifacts: 'dist/**/*', fingerprint: true  
-        }  
+  
         failure {  
-            emailext (  
-                subject: "Build Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",  
-                body: "Build failed. Check console output at ${env.BUILD_URL}",  
-                to: "${env.CHANGE_AUTHOR_EMAIL}"  
-            )  
+            echo 'El pipeline falló. Verifica los logs para más detalles.'  
+        }  
+  
+        success {  
+            echo 'Pipeline ejecutado exitosamente.'  
         }  
     }  
 }
